@@ -4,7 +4,7 @@ A public-data-first MCP server for a Hypixel SkyBlock companion. This is source 
 
 ## First feature: profile dashboard data
 
-`lookup_skyblock_profile(username, profile_name="Peach")` queries SkyCrypt's public profile API and returns the selected profile payload (when the upstream schema matches), a list of available profiles, retrieval timestamp, and a direct profile link. It does not infer missing fields or bypass privacy settings.
+`lookup_skyblock_profile(username, profile_name="Peach")` resolves the Minecraft username to a UUID through Mojang, then queries Hypixel's official SkyBlock Profiles API. It returns the selected profile payload, that player's member data, available profiles, retrieval timestamp, and a SkyCrypt link. Set `HYPIXEL_API_KEY` as a private environment variable; never commit the key to the repository. Data returned depends on Hypixel API access and in-game API settings.
 
 Configured profile:
 - Username: `TechKid778899`
@@ -12,12 +12,12 @@ Configured profile:
 - Viewer: https://sky.shiiyu.moe/stats/TechKid778899/Peach
 
 Other tools:
-- `get_bazaar_prices(item_id?)` calls Hypixel's official Bazaar endpoint without a key; if access is denied, it reports that instead of attempting a workaround.
+- `get_bazaar_prices(item_id?)` calls Hypixel's official Bazaar endpoint, using `HYPIXEL_API_KEY` if configured.
 - `build_progression_plan(goal, current_progress?, budget_coins?)` makes a checklist from player-supplied details.
 - `add_progress_goal(goal, details?)` saves a goal; `list_progress_goals(include_completed?)` retrieves saved goals; `update_progress_goal(goal_id, status?, progress_note?)` records progress and marks goals active, paused or completed.
 
 ## Privacy
-- No Microsoft/Minecraft credentials, session tokens, or Hypixel API keys are requested, stored, or embedded.
+- No Microsoft/Minecraft credentials or session tokens are requested or stored. The Hypixel API key is read from `HYPIXEL_API_KEY`; do not embed it in code or commit it. Hypixel recommends against using API keys in publicly hosted services, so consider running the service locally for the strongest control over the key.
 - Profile queries are read-only and limited to publicly available data.
 - No profile data is persisted by this starter.
 - Upstream APIs may throttle, change schema, or return private/incomplete data.
@@ -38,7 +38,7 @@ The server is configured for Streamable HTTP on `0.0.0.0:$PORT` (defaults to 800
 1. Create a Python service in a host that supports a long-running Python process and inbound HTTPS. Free tiers may sleep or have usage limits.
 2. Import this repository; install `requirements.txt` and start with `python server.py`.
 3. Confirm the host exposes the MCP endpoint and logs contain no startup errors.
-4. Test the SkyCrypt profile lookup against the live upstream; its endpoint and response schema must be verified.
+4. Add `HYPIXEL_API_KEY` as a private environment variable and test the official Hypixel SkyBlock profile lookup.
 5. Connect the HTTPS MCP endpoint through a supported ChatGPT app setup, then test the tool from ChatGPT.
 6. Build an actual MCP App view for interactive profile cards. Returning JSON alone is not an interactive in-chat view.
 
