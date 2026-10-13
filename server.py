@@ -1,6 +1,6 @@
-"""SkyBlock Companion: public-data-first MCP server.
+"""SkyBlock Companion: MCP server using Hypixel public game data.
 
-No Minecraft credentials or Hypixel API key are requested or stored.
+The Hypixel API key is read only from the HYPIXEL_API_KEY environment variable.
 """
 from __future__ import annotations
 import os
@@ -61,39 +61,77 @@ def _find_profile(payload: Any, profile_name: str) -> tuple[str | None, dict[str
 
 @mcp.tool()
 async def lookup_skyblock_profile(username: str, profile_name: str = "Peach") -> dict[str, Any]:
-    """Fetch a public SkyBlock profile through SkyCrypt and select a profile by cute name."""
+    """Fetch a SkyBlock profile from Hypixel's official API using HYPIXEL_API_KEY."""
     safe_username = _valid_username(username)
     if not safe_username:
         return {"ok": False, "error": "Enter a valid Minecraft username (up to 16 letters, numbers or underscores)."}
     if not profile_name.strip() or len(profile_name) > 40:
         return {"ok": False, "error": "Enter a valid profile name, such as Peach."}
-    url = f"{SKYCRYPT_API.rstrip('/')}/{quote(safe_username, safe='')}"
+    api_key = os.getenv("HYPIXEL_API_KEY", "").strip()
     profile_url = f"https://sky.shiiyu.moe/stats/{quote(safe_username, safe='')}/{quote(profile_name.strip(), safe='')}"
+    if not api_key:
+        return {
+            "ok": False,
+            "username": safe_username,
+            "error": "Hypixel API key is not configured. Add HYPIXEL_API_KEY to the server's private environment variables.",
+            "profile_url": profile_url,
+        }
+
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
-            response = await client.get(url, headers=HEADERS)
-        if response.status_code == 404:
-            return {"ok": False, "username": safe_username, "profile_name": profile_name, "error": "No public profile was found. Check the username or profile visibility.", "profile_url": profile_url}
+            # Resolve the Minecraft username to a UUID using Mojang's public API.
+            mojang_response = await client.get(
+                f"https://api.mojang.com/users/profiles/minecraft/{quote(safe_username, safe='')}",
+                headers=HEADERS,
+            )
+            if mojang_response.status_code == 404:
+                return {"ok": False, "username": safe_username, "error": "Mojang could not find that Minecraft username.", "profile_url": profile_url}
+            mojang_response.raise_for_status()
+            mojang_data = mojang_response.json()
+            uuid = mojang_data.get("id") if isinstance(mojang_data, dict) else None
+            if not isinstance(uuid, str) or not uuid:
+                return {"ok": False, "username": safe_username, "error": "Mojang returned no UUID for that username.", "profile_url": profile_url}
+
+            # Ask Hypixel for the user's SkyBlock profiles. Never return the API key.
+            response = await client.get(
+                "https://api.hypixel.net/v2/skyblock/profiles",
+                params={"uuid": uuid},
+                headers={**HEADERS, "API-Key": api_key},
+            )
+        if response.status_code == 403:
+            return {"ok": False, "username": safe_username, "error": "Hypixel rejected the API key (HTTP 403). Check HYPIXEL_API_KEY in Render and confirm the key is active.", "profile_url": profile_url, "source_url": "https://api.hypixel.net/v2/skyblock/profiles"}
+        if response.status_code == 429:
+            return {"ok": False, "username": safe_username, "error": "Hypixel API rate limit reached. Wait before retrying.", "profile_url": profile_url}
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, (dict, list)):
-            return {"ok": False, "username": safe_username, "error": "The profile API returned an unexpected response format.", "profile_url": profile_url}
-        profile_key, selected = _find_profile(payload, profile_name)
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            return {"ok": False, "username": safe_username, "error": "Hypixel returned an unsuccessful or unexpected API response.", "profile_url": profile_url}
+        profiles = payload.get("profiles") or []
+        wanted = profile_name.strip().casefold()
+        selected = next((p for p in profiles if isinstance(p, dict) and str(p.get("cute_name", "")).casefold() == wanted), None)
+        if selected is None:
+            return {
+                "ok": False, "username": safe_username, "requested_profile": profile_name,
+                "error": "That profile was not returned by Hypixel. It may not exist, may be hidden by in-game API settings, or the profile name may differ.",
+                "available_profiles": [{"cute_name": p.get("cute_name"), "profile_id": p.get("profile_id"), "selected": p.get("selected")} for p in profiles if isinstance(p, dict)],
+                "profile_url": profile_url, "source": "Hypixel official API",
+            }
+        members = selected.get("members") or {}
+        member = members.get(uuid) if isinstance(members, dict) else None
         return {
-            "ok": True, "username": safe_username, "requested_profile": profile_name,
-            "matched_profile_key": profile_key, "profile_found": selected is not None,
-            "source": "SkyCrypt public profile API", "source_url": url, "profile_url": profile_url,
-            "retrieved_at_utc": datetime.now(timezone.utc).isoformat(), "profile": selected,
-            "available_profiles": [
-                {"key": str(key), "cute_name": value.get("cute_name"), "selected": value.get("current", value.get("selected"))}
-                for key, value in _profile_items(payload).items() if isinstance(value, dict)
-            ],
-            "note": "Profile fields depend on the upstream API response and privacy settings. Missing values are not inferred."
+            "ok": True, "username": safe_username, "uuid": uuid, "requested_profile": profile_name,
+            "matched_profile_key": selected.get("profile_id"), "profile_found": True,
+            "source": "Hypixel official SkyBlock API",
+            "source_url": "https://api.hypixel.net/v2/skyblock/profiles",
+            "profile_url": profile_url, "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "profile": selected, "player_member_data": member,
+            "available_profiles": [{"cute_name": p.get("cute_name"), "profile_id": p.get("profile_id"), "selected": p.get("selected")} for p in profiles if isinstance(p, dict)],
+            "note": "Data availability depends on Hypixel API access and the player's in-game API settings. Missing values are not inferred.",
         }
     except httpx.HTTPStatusError as exc:
-        return {"ok": False, "username": safe_username, "error": f"SkyCrypt returned HTTP {exc.response.status_code}.", "profile_url": profile_url, "source_url": url}
+        return {"ok": False, "username": safe_username, "error": f"Upstream API returned HTTP {exc.response.status_code}.", "profile_url": profile_url}
     except (httpx.HTTPError, ValueError) as exc:
-        return {"ok": False, "username": safe_username, "error": f"Profile lookup failed ({type(exc).__name__}). The upstream API may be unavailable or have changed.", "profile_url": profile_url, "source_url": url}
+        return {"ok": False, "username": safe_username, "error": f"Profile lookup failed ({type(exc).__name__}). The upstream API may be unavailable or have changed.", "profile_url": profile_url}
 
 
 @mcp.tool()
@@ -101,7 +139,7 @@ async def get_bazaar_prices(item_id: str = "") -> dict[str, Any]:
     """Retrieve Hypixel Bazaar prices, optionally filtered by product ID; never embeds an API key."""
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
-            response = await client.get(HYPIXEL_BAZAAR_API, headers=HEADERS)
+            response = await client.get(HYPIXEL_BAZAAR_API, headers={**HEADERS, **({"API-Key": os.getenv("HYPIXEL_API_KEY", "").strip()} if os.getenv("HYPIXEL_API_KEY", "").strip() else {})})
         if response.status_code in (401, 403):
             return {"ok": False, "error": "Hypixel requires API authentication for this request. This public-only starter does not store an API key.", "source_url": "https://developer.hypixel.net/"}
         response.raise_for_status()
