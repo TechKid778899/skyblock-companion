@@ -14,6 +14,7 @@ Configured profile:
 Other tools:
 - `get_bazaar_prices(item_id?)` calls Hypixel's official Bazaar endpoint without a key; if access is denied, it reports that instead of attempting a workaround.
 - `build_progression_plan(goal, current_progress?, budget_coins?)` makes a checklist from player-supplied details.
+- `add_progress_goal(goal, details?)` saves a goal; `list_progress_goals(include_completed?)` retrieves saved goals; `update_progress_goal(goal_id, status?, progress_note?)` records progress and marks goals active, paused or completed.
 
 ## Privacy
 - No Microsoft/Minecraft credentials, session tokens, or Hypixel API keys are requested, stored, or embedded.
