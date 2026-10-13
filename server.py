@@ -12,8 +12,15 @@ import sqlite3
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
-mcp = FastMCP("SkyBlock Companion")
+mcp = FastMCP(
+    "SkyBlock Companion",
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=["skyblock-companion.onrender.com", "skyblock-companion.onrender.com:*"],
+        allowed_origins=["https://skyblock-companion.onrender.com"],
+    ),
+)
 SKYCRYPT_API = os.getenv("SKYCRYPT_API_BASE", "https://sky.shiiyu.moe/api/v2/profile")
 HYPIXEL_BAZAAR_API = "https://api.hypixel.net/v2/skyblock/bazaar"
 TIMEOUT = httpx.Timeout(15.0, connect=8.0)
