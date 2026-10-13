@@ -7,6 +7,8 @@ import os
 from typing import Any
 from urllib.parse import quote
 from datetime import datetime, timezone
+from pathlib import Path
+import sqlite3
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -126,6 +128,94 @@ def build_progression_plan(goal: str, current_progress: str = "", budget_coins: 
     except (ValueError, TypeError):
         budget = 0
     return {"ok": True, "goal": goal, "current_progress": current_progress.strip() or "Not provided yet", "budget_coins": budget, "plan": ["Confirm the exact unlock, item or milestone required.", "Check public profile data and its last-save time where available.", "Compare the lowest-cost route with the fastest practical route.", "Turn the route into a checklist and update it as progress changes."], "note": "This initial planner does not persist data or claim to know stats that were not retrieved."}
+
+
+# Progress tracking storage. Set DATA_PATH to a persistent mounted directory on your host
+# if progress must survive redeploys/restarts; the default local file may be ephemeral.
+DATA_PATH = Path(os.getenv("DATA_PATH", "."))
+DB_PATH = DATA_PATH / "skyblock_companion.sqlite3"
+
+
+def _init_progress_db() -> None:
+    DATA_PATH.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS goals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                progress_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+
+@mcp.tool()
+def add_progress_goal(goal: str, details: str = "") -> dict[str, Any]:
+    """Save a progression goal so it can be revisited and updated in later chats."""
+    goal = goal.strip()
+    if not goal or len(goal) > 200:
+        return {"ok": False, "error": "Goal must be between 1 and 200 characters."}
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        _init_progress_db()
+        with sqlite3.connect(DB_PATH) as db:
+            cursor = db.execute(
+                "INSERT INTO goals (goal, details, status, progress_notes, created_at, updated_at) VALUES (?, ?, 'active', '', ?, ?)",
+                (goal, details.strip()[:2000], now, now),
+            )
+            goal_id = cursor.lastrowid
+        return {"ok": True, "goal_id": goal_id, "goal": goal, "status": "active", "created_at": now}
+    except (OSError, sqlite3.Error) as exc:
+        return {"ok": False, "error": f"Could not save progress goal ({type(exc).__name__}). Check storage configuration."}
+
+
+@mcp.tool()
+def list_progress_goals(include_completed: bool = True) -> dict[str, Any]:
+    """List saved progression goals, newest updates first."""
+    try:
+        _init_progress_db()
+        where = "" if include_completed else "WHERE status != 'completed'"
+        with sqlite3.connect(DB_PATH) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                f"SELECT id, goal, details, status, progress_notes, created_at, updated_at FROM goals {where} ORDER BY updated_at DESC"
+            ).fetchall()
+        return {"ok": True, "count": len(rows), "goals": [dict(row) for row in rows]}
+    except (OSError, sqlite3.Error) as exc:
+        return {"ok": False, "error": f"Could not read progress goals ({type(exc).__name__}). Check storage configuration."}
+
+
+@mcp.tool()
+def update_progress_goal(goal_id: int, status: str = "", progress_note: str = "") -> dict[str, Any]:
+    """Update a saved goal's status and/or append a progress note. Status: active, paused, completed."""
+    if goal_id < 1:
+        return {"ok": False, "error": "Goal ID must be a positive number."}
+    if status and status not in {"active", "paused", "completed"}:
+        return {"ok": False, "error": "Status must be active, paused, or completed."}
+    if len(progress_note) > 2000:
+        return {"ok": False, "error": "Progress note must be 2000 characters or fewer."}
+    try:
+        _init_progress_db()
+        with sqlite3.connect(DB_PATH) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if row is None:
+                return {"ok": False, "error": "No saved goal found with that ID."}
+            new_status = status or row["status"]
+            old_notes = row["progress_notes"] or ""
+            if progress_note.strip():
+                stamp = datetime.now(timezone.utc).isoformat()
+                new_notes = (old_notes + "\\n" if old_notes else "") + f"[{stamp}] {progress_note.strip()}"
+            else:
+                new_notes = old_notes
+            now = datetime.now(timezone.utc).isoformat()
+            db.execute("UPDATE goals SET status = ?, progress_notes = ?, updated_at = ? WHERE id = ?", (new_status, new_notes, now, goal_id))
+        return {"ok": True, "goal_id": goal_id, "status": new_status, "updated_at": now, "progress_note_added": bool(progress_note.strip())}
+    except (OSError, sqlite3.Error) as exc:
+        return {"ok": False, "error": f"Could not update progress goal ({type(exc).__name__}). Check storage configuration."}
 
 
 if __name__ == "__main__":
