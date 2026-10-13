@@ -208,7 +208,7 @@ def update_progress_goal(goal_id: int, status: str = "", progress_note: str = ""
             old_notes = row["progress_notes"] or ""
             if progress_note.strip():
                 stamp = datetime.now(timezone.utc).isoformat()
-                new_notes = (old_notes + "\\n" if old_notes else "") + f"[{stamp}] {progress_note.strip()}"
+                new_notes = (old_notes + " | " if old_notes else "") + f"[{stamp}] {progress_note.strip()}"
             else:
                 new_notes = old_notes
             now = datetime.now(timezone.utc).isoformat()
